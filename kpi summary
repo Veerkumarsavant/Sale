@@ -1,0 +1,138 @@
+
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from plotly.data import tips
+from datetime import datetime
+
+# Load CSV file
+file_path =r"https://www.kaggle.com/datasets/kyanyoga/sample-sales-data"
+try:
+    df = pd.read_csv(file_path, encoding='ISO-8859-1')
+except:
+    # Fallback to Plotly sample dataset
+    df = tips().rename(columns={
+        'total_bill': 'Revenue',
+        'tip': 'Profit',
+        'day': 'TERRITORY'
+    })
+    df['ORDERDATE'] = pd.date_range(start='2023-01-01', periods=len(df), freq='D')
+
+# Map dataset columns for dashboard
+if 'SALES' in df.columns:
+    df.rename(columns={'SALES': 'Revenue'}, inplace=True)
+
+if 'Profit' not in df.columns:
+    df['Profit'] = df['Revenue'] * 0.3  # Assume 30% profit margin
+
+if 'PRODUCTLINE' not in df.columns:
+    df['PRODUCTLINE'] = 'General'
+if 'CUSTOMERNAME' not in df.columns:
+    df['CUSTOMERNAME'] = df.index.astype(str)  # fallback unique customer IDs
+if 'TERRITORY' not in df.columns:
+    df['TERRITORY'] = 'Unknown'
+
+# Handle missing values in sunburst hierarchy
+df['TERRITORY'] = df['TERRITORY'].replace('', 'Unknown').fillna('Unknown')
+df['PRODUCTLINE'] = df['PRODUCTLINE'].replace('', 'Unknown').fillna('Unknown')
+
+# Ensure ORDERDATE is datetime
+df['ORDERDATE'] = pd.to_datetime(df['ORDERDATE'])
+df['YEAR'] = df['ORDERDATE'].dt.year
+df['MONTH'] = df['ORDERDATE'].dt.month_name()
+df['MONTH_NUM'] = df['ORDERDATE'].dt.month
+df['QUARTER'] = 'Q' + df['ORDERDATE'].dt.quarter.astype(str)
+
+# %% [markdown]
+# ## 2. Key Metrics Calculation
+current_year = df['YEAR'].max()
+prev_year = current_year - 1
+
+current_revenue = df[df['YEAR'] == current_year]['Revenue'].sum()
+previous_revenue = df[df['YEAR'] == prev_year]['Revenue'].sum()
+
+# Avoid divide-by-zero in YoY Growth
+if previous_revenue > 0:
+    yoy_growth = ((current_revenue - previous_revenue) / previous_revenue) * 100
+else:
+    yoy_growth = np.nan
+
+metrics = {
+    'Total Revenue': df['Revenue'].sum(),
+    'Total Profit': df['Profit'].sum(),
+    'Avg. Profit Margin': (df['Profit'].sum() / df['Revenue'].sum()) * 100,
+    'Current Year Revenue': current_revenue,
+    'YoY Growth': yoy_growth,
+    'Top Product': df.groupby('PRODUCTLINE')['Revenue'].sum().idxmax(),
+    'Customers Count': df['CUSTOMERNAME'].nunique()
+}
+
+monthly_revenue = df.groupby(['YEAR', 'MONTH', 'MONTH_NUM', 'QUARTER'])['Revenue'].sum().reset_index()
+monthly_revenue = monthly_revenue.sort_values(['YEAR', 'MONTH_NUM'])
+
+fig_trend = px.line(
+    monthly_revenue,
+    x='MONTH',
+    y='Revenue',
+    color='YEAR',
+    title='Monthly Revenue Trend',
+    labels={'Revenue': 'Revenue ($)'},
+    template='plotly_white'
+)
+
+fig_sunburst = px.sunburst(
+    df,
+    path=['TERRITORY', 'PRODUCTLINE'],
+    values='Profit',
+    title='Profit Distribution by Territory & Product',
+    color='Revenue',
+    color_continuous_scale='Blues'
+)
+
+# Financial Metrics Gauge
+fig_gauges = make_subplots(rows=1, cols=3, specs=[[{'type': 'domain'}]*3])
+
+fig_gauges.add_trace(go.Indicator(
+    mode="number+delta",
+    value=metrics['Current Year Revenue'],
+    title={"text": f"Revenue ({current_year})"},
+    delta={'reference': previous_revenue},
+    domain={'row':0, 'column':0}
+), row=1, col=1)
+
+fig_gauges.add_trace(go.Indicator(
+    mode="number+delta",
+    value=metrics['Avg. Profit Margin'],
+    title={"text": "Profit Margin %"},
+    delta={'reference': 15},
+    domain={'row':0, 'column':1}
+), row=1, col=2)
+
+fig_gauges.add_trace(go.Indicator(
+    mode="number+delta",
+    value=metrics['YoY Growth'] if not np.isnan(metrics['YoY Growth']) else 0,
+    title={"text": "YoY Growth %"},
+    domain={'row':0, 'column':2}
+), row=1, col=3)
+
+fig_gauges.update_layout(title_text="Key Financial Metrics", grid={'rows':1, 'columns':3, 'pattern':"independent"})
+
+yoy_display = f"{metrics['YoY Growth']:.1f}%" if not np.isnan(metrics['YoY Growth']) else "N/A"
+print(f"""
+## Key Performance Indicators
+- **Total Revenue**: ${metrics['Total Revenue']:,.2f}
+- **Total Profit**: ${metrics['Total Profit']:,.2f}
+- **Profit Margin**: {metrics['Avg. Profit Margin']:.1f}%
+- **Year-over-Year Growth**: {yoy_display}
+- **Top Performing Product**: {metrics['Top Product']}
+- **Active Customers**: {metrics['Customers Count']}
+""")
+
+fig_trend.show()
+fig_sunburst.show()
+fig_gauges.show()
+
+df.to_csv('sales_data_analyzed.csv', index=False)
+print("Analysis exported to CSV")
